@@ -1,0 +1,7 @@
+spring:
+  datasource:
+    password: test-only-postgres-password
+
+app:
+  jwt:
+    secret: test-only-opspulse-secret-key-minimum-32-bytes-long-for-hs256
