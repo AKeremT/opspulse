@@ -147,6 +147,30 @@ npm run lint && npm run build
 
 ---
 
+## API Overview
+
+| Domain | Endpoints | Auth |
+| :--- | :--- | :--- |
+| **Auth** | `POST /api/v1/auth/register`, `login`, `refresh`, `logout` | Public |
+| **Workspaces** | `GET/POST /api/v1/workspaces` | JWT (`Bearer`) |
+| **Monitors** | `GET/POST /api/v1/workspaces/{id}/monitors`, `PATCH .../pause`, `DELETE`, `GET .../checks` | JWT + Workspace RBAC |
+| **Incidents** | `GET /api/v1/workspaces/{id}/incidents`, `POST .../acknowledge` | JWT + Workspace RBAC |
+| **Alert Channels** | `GET/POST/DELETE /api/v1/workspaces/{id}/alert-channels` (`WEBHOOK`, `SLACK`, `EMAIL`) | JWT + Workspace RBAC |
+| **Maintenance** | `GET/POST/DELETE /api/v1/workspaces/{id}/maintenance-windows` | JWT + Workspace RBAC |
+| **Live Events** | `GET /api/v1/workspaces/{id}/events` (`text/event-stream`) | JWT + Workspace RBAC |
+| **Status Page Settings** | `GET/PUT /api/v1/workspaces/{id}/status-page` | JWT (`OWNER`/`ADMIN` for `PUT`) |
+| **Public Status** | `GET /api/v1/public/status/{slug}` (Redis cached & rate-limited) | Public (Opt-in) |
+
+---
+
+## CI/CD
+
+GitHub Actions (`.github/workflows/ci.yml`) automatically runs on every push and pull request to `main`:
+- **`backend-test`:** Java 21 + `./mvnw -B test` (full Testcontainers PostgreSQL 17 & Redis 7 suite)
+- **`frontend-build`:** Node 22 + `npm ci && npm run lint && npm run build`
+
+---
+
 ## License
 
 Distributed under the MIT License.
