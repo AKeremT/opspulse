@@ -1,6 +1,6 @@
 package com.opspulse.incident.service;
 
-import com.opspulse.alert.service.WebhookAlertService;
+import com.opspulse.alert.service.WebhookAlertService.PendingWebhookAlert;
 import com.opspulse.common.exception.ConflictException;
 import com.opspulse.common.exception.ResourceNotFoundException;
 import com.opspulse.incident.domain.Incident;
@@ -14,12 +14,15 @@ import com.opspulse.notification.service.SseNotificationService;
 import com.opspulse.workspace.service.WorkspaceAccessService;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.UUID;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 /**
- * Manages incident lifecycle transitions, SSE broadcasts, and webhook alerts.
+ * Manages incident lifecycle transitions and builds post-commit notification payloads.
  */
 @Service
 public class IncidentService {
@@ -32,18 +35,15 @@ public class IncidentService {
 
     private final IncidentRepository incidentRepository;
     private final WorkspaceAccessService workspaceAccessService;
-    private final WebhookAlertService webhookAlertService;
     private final SseNotificationService sseNotificationService;
 
     public IncidentService(
             IncidentRepository incidentRepository,
             WorkspaceAccessService workspaceAccessService,
-            WebhookAlertService webhookAlertService,
             SseNotificationService sseNotificationService
     ) {
         this.incidentRepository = incidentRepository;
         this.workspaceAccessService = workspaceAccessService;
-        this.webhookAlertService = webhookAlertService;
         this.sseNotificationService = sseNotificationService;
     }
 
@@ -67,14 +67,19 @@ public class IncidentService {
         if (incident.getStatus() == IncidentStatus.OPEN) {
             incident.acknowledge(Instant.now());
             incident = incidentRepository.save(incident);
-            publishIncidentSse(incident, incident.getMonitor());
+            IncidentChangedEvent event = toSseEvent(incident, incident.getMonitor());
+            publishAfterCommit(workspaceId, event);
         }
 
         return toResponse(incident);
     }
 
+    /**
+     * Evaluates a check result against the monitor's failure threshold and active incidents.
+     * Returns an {@link IncidentTransition} to be dispatched after the caller's transaction commits.
+     */
     @Transactional
-    public void handleCheckResult(
+    public Optional<IncidentTransition> handleCheckResult(
             Monitor monitor,
             MonitorStatus checkStatus,
             Instant checkedAt,
@@ -99,38 +104,63 @@ public class IncidentService {
                         checkedAt,
                         summary
                 ));
-                UUID workspaceId = monitor.getWorkspace().getId();
-                webhookAlertService.sendIncidentAlert(workspaceId, "incident.opened", incident, monitor);
-                publishIncidentSse(incident, monitor);
+                return Optional.of(toTransition("incident.opened", incident, monitor));
             }
         } else if (checkStatus == MonitorStatus.UP) {
-            incidentRepository
-                    .findFirstByMonitorIdAndStatusInOrderByStartedAtDesc(monitor.getId(), ACTIVE_STATUSES)
-                    .ifPresent(activeIncident -> {
-                        activeIncident.resolve(checkedAt);
-                        Incident resolved = incidentRepository.save(activeIncident);
-                        UUID workspaceId = monitor.getWorkspace().getId();
-                        webhookAlertService.sendIncidentAlert(workspaceId, "incident.resolved", resolved, monitor);
-                        publishIncidentSse(resolved, monitor);
-                    });
+            Optional<Incident> activeOpt = incidentRepository
+                    .findFirstByMonitorIdAndStatusInOrderByStartedAtDesc(monitor.getId(), ACTIVE_STATUSES);
+            if (activeOpt.isPresent()) {
+                Incident activeIncident = activeOpt.get();
+                activeIncident.resolve(checkedAt);
+                Incident resolved = incidentRepository.save(activeIncident);
+                return Optional.of(toTransition("incident.resolved", resolved, monitor));
+            }
+        }
+        return Optional.empty();
+    }
+
+    private void publishAfterCommit(UUID workspaceId, IncidentChangedEvent event) {
+        if (TransactionSynchronizationManager.isSynchronizationActive()) {
+            TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+                @Override
+                public void afterCommit() {
+                    sseNotificationService.publishIncidentChanged(workspaceId, event);
+                }
+            });
+        } else {
+            sseNotificationService.publishIncidentChanged(workspaceId, event);
         }
     }
 
-    private void publishIncidentSse(Incident incident, Monitor monitor) {
-        UUID workspaceId = incident.getWorkspace().getId();
-        sseNotificationService.publishIncidentChanged(
+    private IncidentTransition toTransition(String eventType, Incident incident, Monitor monitor) {
+        UUID workspaceId = monitor.getWorkspace().getId();
+        return new IncidentTransition(
                 workspaceId,
-                new IncidentChangedEvent(
+                toSseEvent(incident, monitor),
+                new PendingWebhookAlert(
+                        workspaceId,
+                        eventType,
                         incident.getId(),
                         monitor.getId(),
-                        workspaceId,
                         monitor.getName(),
-                        incident.getStatus(),
-                        incident.getSummary(),
-                        incident.getStartedAt(),
-                        incident.getAcknowledgedAt(),
-                        incident.getResolvedAt()
+                        monitor.getUrl(),
+                        incident.getStatus().name(),
+                        incident.getSummary()
                 )
+        );
+    }
+
+    private IncidentChangedEvent toSseEvent(Incident incident, Monitor monitor) {
+        return new IncidentChangedEvent(
+                incident.getId(),
+                monitor.getId(),
+                incident.getWorkspace().getId(),
+                monitor.getName(),
+                incident.getStatus(),
+                incident.getSummary(),
+                incident.getStartedAt(),
+                incident.getAcknowledgedAt(),
+                incident.getResolvedAt()
         );
     }
 
@@ -152,5 +182,12 @@ public class IncidentService {
         return summary.length() <= MAX_SUMMARY_LENGTH
                 ? summary
                 : summary.substring(0, MAX_SUMMARY_LENGTH);
+    }
+
+    public record IncidentTransition(
+            UUID workspaceId,
+            IncidentChangedEvent sseEvent,
+            PendingWebhookAlert webhookAlert
+    ) {
     }
 }

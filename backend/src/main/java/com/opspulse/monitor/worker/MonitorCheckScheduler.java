@@ -1,6 +1,8 @@
 package com.opspulse.monitor.worker;
 
+import com.opspulse.alert.service.WebhookAlertService;
 import com.opspulse.incident.service.IncidentService;
+import com.opspulse.incident.service.IncidentService.IncidentTransition;
 import com.opspulse.monitor.domain.Monitor;
 import com.opspulse.monitor.domain.MonitorCheck;
 import com.opspulse.monitor.repository.MonitorCheckRepository;
@@ -26,8 +28,9 @@ import org.springframework.stereotype.Component;
 import org.springframework.transaction.support.TransactionTemplate;
 
 /**
- * Periodically polls due monitors and executes health checks concurrently
- * using Java 21 virtual threads.
+ * Periodically claims due monitors using row-level locking, executes health checks
+ * concurrently on Java 21 virtual threads, persists outcomes, and dispatches
+ * SSE/webhook notifications after transaction commit.
  */
 @Component
 public class MonitorCheckScheduler {
@@ -38,6 +41,7 @@ public class MonitorCheckScheduler {
     private final MonitorCheckRepository monitorCheckRepository;
     private final MonitorCheckExecutor checkExecutor;
     private final IncidentService incidentService;
+    private final WebhookAlertService webhookAlertService;
     private final SseNotificationService sseNotificationService;
     private final TransactionTemplate transactionTemplate;
 
@@ -46,6 +50,7 @@ public class MonitorCheckScheduler {
             MonitorCheckRepository monitorCheckRepository,
             MonitorCheckExecutor checkExecutor,
             IncidentService incidentService,
+            WebhookAlertService webhookAlertService,
             SseNotificationService sseNotificationService,
             TransactionTemplate transactionTemplate
     ) {
@@ -53,6 +58,7 @@ public class MonitorCheckScheduler {
         this.monitorCheckRepository = monitorCheckRepository;
         this.checkExecutor = checkExecutor;
         this.incidentService = incidentService;
+        this.webhookAlertService = webhookAlertService;
         this.sseNotificationService = sseNotificationService;
         this.transactionTemplate = transactionTemplate;
     }
@@ -63,24 +69,14 @@ public class MonitorCheckScheduler {
     }
 
     /**
-     * Finds all non-paused monitors whose {@code nextCheckAt <= now}, executes their
-     * HTTP probes concurrently on virtual threads, and persists the check outcomes.
+     * Atomically claims non-paused monitors whose {@code nextCheckAt <= now},
+     * executes HTTP probes concurrently on virtual threads, persists check outcomes,
+     * and dispatches SSE and webhook notifications after commit.
      *
      * @return number of monitors checked in this cycle
      */
     public int runDueChecks() {
-        List<MonitorProbeTarget> targets = transactionTemplate.execute(status -> {
-            List<Monitor> dueMonitors = monitorRepository.findDueMonitors(Instant.now());
-            return dueMonitors.stream()
-                    .map(m -> new MonitorProbeTarget(
-                            m.getId(),
-                            m.getUrl(),
-                            m.getHttpMethod(),
-                            m.getTimeoutMs(),
-                            m.getExpectedStatus()
-                    ))
-                    .toList();
-        });
+        List<MonitorProbeTarget> targets = transactionTemplate.execute(status -> claimDueMonitors());
 
         if (targets == null || targets.isEmpty()) {
             return 0;
@@ -88,8 +84,35 @@ public class MonitorCheckScheduler {
 
         List<ProbeOutcome> outcomes = executeConcurrently(targets);
 
-        transactionTemplate.executeWithoutResult(status -> persistOutcomes(outcomes));
+        PendingNotifications pending = transactionTemplate.execute(status -> persistOutcomes(outcomes));
+        if (pending != null) {
+            dispatchAfterCommit(pending);
+        }
+
         return outcomes.size();
+    }
+
+    private List<MonitorProbeTarget> claimDueMonitors() {
+        Instant now = Instant.now();
+        List<Monitor> dueMonitors = monitorRepository.findDueMonitorsForUpdate(now);
+        if (dueMonitors.isEmpty()) {
+            return List.of();
+        }
+
+        for (Monitor monitor : dueMonitors) {
+            monitor.claimForCheck(now);
+        }
+        monitorRepository.saveAll(dueMonitors);
+
+        return dueMonitors.stream()
+                .map(m -> new MonitorProbeTarget(
+                        m.getId(),
+                        m.getUrl(),
+                        m.getHttpMethod(),
+                        m.getTimeoutMs(),
+                        m.getExpectedStatus()
+                ))
+                .toList();
     }
 
     private List<ProbeOutcome> executeConcurrently(List<MonitorProbeTarget> targets) {
@@ -114,17 +137,18 @@ public class MonitorCheckScheduler {
         return outcomes;
     }
 
-    private void persistOutcomes(List<ProbeOutcome> outcomes) {
+    private PendingNotifications persistOutcomes(List<ProbeOutcome> outcomes) {
         if (outcomes.isEmpty()) {
-            return;
+            return new PendingNotifications(List.of(), List.of());
         }
 
         List<UUID> monitorIds = outcomes.stream().map(ProbeOutcome::monitorId).toList();
-        Map<UUID, Monitor> monitorsById = monitorRepository.findAllById(monitorIds).stream()
+        Map<UUID, Monitor> monitorsById = monitorRepository.findAllWithWorkspaceByIdIn(monitorIds).stream()
                 .collect(Collectors.toMap(Monitor::getId, Function.identity()));
 
         List<MonitorCheck> checksToSave = new ArrayList<>(outcomes.size());
-        List<MonitorCheckedEvent> sseEvents = new ArrayList<>(outcomes.size());
+        List<MonitorCheckedEvent> monitorEvents = new ArrayList<>(outcomes.size());
+        List<IncidentTransition> incidentTransitions = new ArrayList<>();
 
         for (ProbeOutcome outcome : outcomes) {
             Monitor monitor = monitorsById.get(outcome.monitorId());
@@ -142,7 +166,7 @@ public class MonitorCheckScheduler {
             ));
 
             UUID workspaceId = monitor.getWorkspace().getId();
-            sseEvents.add(new MonitorCheckedEvent(
+            monitorEvents.add(new MonitorCheckedEvent(
                     monitor.getId(),
                     workspaceId,
                     monitor.getName(),
@@ -165,12 +189,26 @@ public class MonitorCheckScheduler {
                         outcome.status(),
                         outcome.checkedAt(),
                         outcome.errorMessage()
-                );
+                ).ifPresent(incidentTransitions::add);
             }
         }
 
-        for (MonitorCheckedEvent event : sseEvents) {
+        return new PendingNotifications(monitorEvents, incidentTransitions);
+    }
+
+    private void dispatchAfterCommit(PendingNotifications pending) {
+        for (IncidentTransition transition : pending.incidentTransitions()) {
+            webhookAlertService.sendIncidentAlert(transition.webhookAlert());
+            sseNotificationService.publishIncidentChanged(transition.workspaceId(), transition.sseEvent());
+        }
+        for (MonitorCheckedEvent event : pending.monitorEvents()) {
             sseNotificationService.publishMonitorChecked(event.workspaceId(), event);
         }
+    }
+
+    private record PendingNotifications(
+            List<MonitorCheckedEvent> monitorEvents,
+            List<IncidentTransition> incidentTransitions
+    ) {
     }
 }

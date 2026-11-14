@@ -196,6 +196,10 @@ public class Monitor {
         }
     }
 
+    public void claimForCheck(Instant claimedAt) {
+        this.nextCheckAt = claimedAt.plusSeconds(this.intervalSeconds);
+    }
+
     public void recordCheckResult(MonitorStatus checkStatus, int latencyMs, Instant checkedAt) {
         this.lastCheckedAt = checkedAt;
         this.lastLatencyMs = latencyMs;

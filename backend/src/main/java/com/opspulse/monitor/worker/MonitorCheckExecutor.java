@@ -31,7 +31,7 @@ public class MonitorCheckExecutor {
         this.urlSafetyValidator = urlSafetyValidator;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(CONNECT_TIMEOUT)
-                .followRedirects(HttpClient.Redirect.NORMAL)
+                .followRedirects(HttpClient.Redirect.NEVER)
                 .build();
     }
 
