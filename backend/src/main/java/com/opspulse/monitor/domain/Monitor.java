@@ -195,4 +195,17 @@ public class Monitor {
             this.nextCheckAt = Instant.now();
         }
     }
+
+    public void recordCheckResult(MonitorStatus checkStatus, int latencyMs, Instant checkedAt) {
+        this.lastCheckedAt = checkedAt;
+        this.lastLatencyMs = latencyMs;
+        this.nextCheckAt = checkedAt.plusSeconds(this.intervalSeconds);
+        if (checkStatus == MonitorStatus.UP) {
+            this.consecutiveFailures = 0;
+            this.currentStatus = MonitorStatus.UP;
+        } else {
+            this.consecutiveFailures += 1;
+            this.currentStatus = MonitorStatus.DOWN;
+        }
+    }
 }
