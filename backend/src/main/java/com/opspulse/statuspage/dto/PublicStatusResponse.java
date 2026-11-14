@@ -15,7 +15,8 @@ public record PublicStatusResponse(
         String overallStatus,
         Instant generatedAt,
         List<PublicMonitorStatus> monitors,
-        List<PublicIncidentSummary> recentIncidents
+        List<PublicIncidentSummary> recentIncidents,
+        List<PublicMaintenanceSummary> maintenanceWindows
 ) {
 
     public record PublicMonitorStatus(
@@ -45,6 +46,16 @@ public record PublicStatusResponse(
             Instant startedAt,
             Instant resolvedAt,
             String summary
+    ) {
+    }
+
+    public record PublicMaintenanceSummary(
+            UUID id,
+            String title,
+            String description,
+            Instant startsAt,
+            Instant endsAt,
+            boolean active
     ) {
     }
 }

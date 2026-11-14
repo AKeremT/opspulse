@@ -7,6 +7,7 @@ import com.opspulse.incident.domain.Incident;
 import com.opspulse.incident.domain.IncidentStatus;
 import com.opspulse.incident.dto.IncidentResponse;
 import com.opspulse.incident.repository.IncidentRepository;
+import com.opspulse.maintenance.repository.MaintenanceWindowRepository;
 import com.opspulse.monitor.domain.Monitor;
 import com.opspulse.monitor.domain.MonitorStatus;
 import com.opspulse.notification.dto.IncidentChangedEvent;
@@ -34,15 +35,18 @@ public class IncidentService {
     );
 
     private final IncidentRepository incidentRepository;
+    private final MaintenanceWindowRepository maintenanceWindowRepository;
     private final WorkspaceAccessService workspaceAccessService;
     private final SseNotificationService sseNotificationService;
 
     public IncidentService(
             IncidentRepository incidentRepository,
+            MaintenanceWindowRepository maintenanceWindowRepository,
             WorkspaceAccessService workspaceAccessService,
             SseNotificationService sseNotificationService
     ) {
         this.incidentRepository = incidentRepository;
+        this.maintenanceWindowRepository = maintenanceWindowRepository;
         this.workspaceAccessService = workspaceAccessService;
         this.sseNotificationService = sseNotificationService;
     }
@@ -87,6 +91,9 @@ public class IncidentService {
     ) {
         if (checkStatus == MonitorStatus.DOWN
                 && monitor.getConsecutiveFailures() >= monitor.getFailureThreshold()) {
+            if (maintenanceWindowRepository.existsActiveWindow(monitor.getWorkspace().getId(), checkedAt)) {
+                return Optional.empty();
+            }
             boolean hasActive = incidentRepository
                     .findFirstByMonitorIdAndStatusInOrderByStartedAtDesc(monitor.getId(), ACTIVE_STATUSES)
                     .isPresent();

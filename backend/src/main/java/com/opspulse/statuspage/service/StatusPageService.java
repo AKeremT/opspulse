@@ -4,6 +4,8 @@ import com.opspulse.common.exception.ConflictException;
 import com.opspulse.common.exception.ResourceNotFoundException;
 import com.opspulse.incident.domain.Incident;
 import com.opspulse.incident.repository.IncidentRepository;
+import com.opspulse.maintenance.domain.MaintenanceWindow;
+import com.opspulse.maintenance.repository.MaintenanceWindowRepository;
 import com.opspulse.monitor.domain.Monitor;
 import com.opspulse.monitor.domain.MonitorStatus;
 import com.opspulse.monitor.repository.MonitorCheckRepository;
@@ -14,6 +16,7 @@ import com.opspulse.statuspage.domain.StatusPage;
 import com.opspulse.statuspage.dto.PublicStatusResponse;
 import com.opspulse.statuspage.dto.PublicStatusResponse.DailyUptimeBucket;
 import com.opspulse.statuspage.dto.PublicStatusResponse.PublicIncidentSummary;
+import com.opspulse.statuspage.dto.PublicStatusResponse.PublicMaintenanceSummary;
 import com.opspulse.statuspage.dto.PublicStatusResponse.PublicMonitorStatus;
 import com.opspulse.statuspage.dto.StatusPageSettingsResponse;
 import com.opspulse.statuspage.dto.UpdateStatusPageRequest;
@@ -55,6 +58,7 @@ public class StatusPageService {
     private final MonitorRepository monitorRepository;
     private final MonitorCheckRepository monitorCheckRepository;
     private final IncidentRepository incidentRepository;
+    private final MaintenanceWindowRepository maintenanceWindowRepository;
     private final PublicStatusCacheService cacheService;
     private final TransactionTemplate readOnlyTransactionTemplate;
 
@@ -64,6 +68,7 @@ public class StatusPageService {
             MonitorRepository monitorRepository,
             MonitorCheckRepository monitorCheckRepository,
             IncidentRepository incidentRepository,
+            MaintenanceWindowRepository maintenanceWindowRepository,
             PublicStatusCacheService cacheService,
             PlatformTransactionManager transactionManager
     ) {
@@ -72,6 +77,7 @@ public class StatusPageService {
         this.monitorRepository = monitorRepository;
         this.monitorCheckRepository = monitorCheckRepository;
         this.incidentRepository = incidentRepository;
+        this.maintenanceWindowRepository = maintenanceWindowRepository;
         this.cacheService = cacheService;
         this.readOnlyTransactionTemplate = new TransactionTemplate(transactionManager);
         this.readOnlyTransactionTemplate.setReadOnly(true);
@@ -206,6 +212,12 @@ public class StatusPageService {
                 .map(this::toPublicIncidentSummary)
                 .toList();
 
+        List<PublicMaintenanceSummary> maintenanceWindows = maintenanceWindowRepository
+                .findActiveAndUpcomingByWorkspaceId(workspaceId, now)
+                .stream()
+                .map(window -> toPublicMaintenanceSummary(window, now))
+                .toList();
+
         return new PublicStatusResponse(
                 statusPage.getSlug(),
                 statusPage.getTitle(),
@@ -213,7 +225,8 @@ public class StatusPageService {
                 overallStatus,
                 now,
                 monitorStatuses,
-                recentIncidents
+                recentIncidents,
+                maintenanceWindows
         );
     }
 
@@ -282,6 +295,17 @@ public class StatusPageService {
                 incident.getStartedAt(),
                 incident.getResolvedAt(),
                 incident.getSummary()
+        );
+    }
+
+    private PublicMaintenanceSummary toPublicMaintenanceSummary(MaintenanceWindow window, Instant now) {
+        return new PublicMaintenanceSummary(
+                window.getId(),
+                window.getTitle(),
+                window.getDescription(),
+                window.getStartsAt(),
+                window.getEndsAt(),
+                window.isActiveAt(now)
         );
     }
 
