@@ -1,0 +1,95 @@
+name: opspulse
+
+services:
+  postgres:
+    image: postgres:17-alpine
+    container_name: opspulse-postgres
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-opspulse}
+      POSTGRES_USER: ${POSTGRES_USER:-opspulse}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-opspulse} -d ${POSTGRES_DB:-opspulse}"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 10s
+
+  redis:
+    image: redis:7-alpine
+    container_name: opspulse-redis
+    restart: unless-stopped
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+      start_period: 5s
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    container_name: opspulse-backend
+    restart: unless-stopped
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      POSTGRES_HOST: postgres
+      POSTGRES_PORT: 5432
+      POSTGRES_DB: ${POSTGRES_DB:-opspulse}
+      POSTGRES_USER: ${POSTGRES_USER:-opspulse}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?POSTGRES_PASSWORD is required}
+      REDIS_HOST: redis
+      REDIS_PORT: 6379
+      SERVER_PORT: 8080
+      JWT_SECRET: ${JWT_SECRET:?JWT_SECRET is required}
+      JWT_ACCESS_EXPIRATION_MS: ${JWT_ACCESS_EXPIRATION_MS:-900000}
+      JWT_REFRESH_EXPIRATION_MS: ${JWT_REFRESH_EXPIRATION_MS:-604800000}
+      CORS_ALLOWED_ORIGINS: ${CORS_ALLOWED_ORIGINS:-http://localhost:8080}
+      MONITOR_ALLOW_PRIVATE_TARGETS: ${MONITOR_ALLOW_PRIVATE_TARGETS:-false}
+      MONITOR_SCHEDULER_ENABLED: ${MONITOR_SCHEDULER_ENABLED:-true}
+      MONITOR_SCHEDULER_POLL_MS: ${MONITOR_SCHEDULER_POLL_MS:-5000}
+      PUBLIC_STATUS_CACHE_TTL_SECONDS: ${PUBLIC_STATUS_CACHE_TTL_SECONDS:-30}
+      PUBLIC_STATUS_RATE_LIMIT_PER_MINUTE: ${PUBLIC_STATUS_RATE_LIMIT_PER_MINUTE:-60}
+      ALERT_EMAIL_ENABLED: ${ALERT_EMAIL_ENABLED:-false}
+      ALERT_EMAIL_FROM: ${ALERT_EMAIL_FROM:-noreply@opspulse.local}
+      SPRING_MAIL_HOST: ${SPRING_MAIL_HOST:-}
+      SPRING_MAIL_PORT: ${SPRING_MAIL_PORT:-587}
+      SPRING_MAIL_USERNAME: ${SPRING_MAIL_USERNAME:-}
+      SPRING_MAIL_PASSWORD: ${SPRING_MAIL_PASSWORD:-}
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/actuator/health || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+    container_name: opspulse-frontend
+    restart: unless-stopped
+    depends_on:
+      backend:
+        condition: service_healthy
+    ports:
+      - "${FRONTEND_PORT:-8080}:8080"
+    healthcheck:
+      test: ["CMD-SHELL", "wget -q --spider http://localhost:8080/ || exit 1"]
+      interval: 15s
+      timeout: 5s
+      retries: 3
+
+volumes:
+  postgres_data:
+  redis_data:
