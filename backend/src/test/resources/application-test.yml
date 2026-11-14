@@ -9,5 +9,9 @@ app:
   public-status:
     cache-ttl-seconds: 30
     rate-limit-per-minute: 60
+  alert:
+    email:
+      enabled: false
+      from: noreply@opspulse.local
   jwt:
     secret: test-only-opspulse-secret-key-minimum-32-bytes-long-for-hs256

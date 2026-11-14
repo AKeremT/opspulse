@@ -17,4 +17,6 @@ public interface AlertChannelRepository extends JpaRepository<AlertChannel, UUID
             UUID workspaceId,
             AlertChannelType channelType
     );
+
+    List<AlertChannel> findAllByWorkspaceIdAndEnabledTrue(UUID workspaceId);
 }

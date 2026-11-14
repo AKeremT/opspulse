@@ -1,7 +1,6 @@
 package com.opspulse.alert.service;
 
 import com.opspulse.alert.domain.AlertChannel;
-import com.opspulse.alert.domain.AlertChannelType;
 import com.opspulse.alert.repository.AlertChannelRepository;
 import com.opspulse.common.exception.BadRequestException;
 import com.opspulse.monitor.service.UrlSafetyValidator;
@@ -34,36 +33,62 @@ public class WebhookAlertService {
     private final AlertChannelRepository alertChannelRepository;
     private final UrlSafetyValidator urlSafetyValidator;
     private final ObjectMapper objectMapper;
+    private final EmailAlertService emailAlertService;
     private final HttpClient httpClient;
 
     public WebhookAlertService(
             AlertChannelRepository alertChannelRepository,
             UrlSafetyValidator urlSafetyValidator,
-            ObjectMapper objectMapper
+            ObjectMapper objectMapper,
+            EmailAlertService emailAlertService
     ) {
         this.alertChannelRepository = alertChannelRepository;
         this.urlSafetyValidator = urlSafetyValidator;
         this.objectMapper = objectMapper;
+        this.emailAlertService = emailAlertService;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(WEBHOOK_TIMEOUT)
                 .build();
     }
 
     public void sendIncidentAlert(PendingWebhookAlert alert) {
-        List<AlertChannel> channels = alertChannelRepository
-                .findAllByWorkspaceIdAndChannelTypeAndEnabledTrue(alert.workspaceId(), AlertChannelType.WEBHOOK);
+        List<AlertChannel> channels = alertChannelRepository.findAllByWorkspaceIdAndEnabledTrue(alert.workspaceId());
         if (channels.isEmpty()) {
             return;
         }
 
-        String humanMessage = String.format(
-                "[OpsPulse] %s — %s (%s): %s",
-                alert.eventType(),
-                alert.monitorName(),
-                alert.monitorUrl(),
-                alert.summary() != null ? alert.summary() : alert.status()
-        );
+        String webhookJsonBody = null;
+        String slackJsonBody = null;
 
+        for (AlertChannel channel : channels) {
+            UUID channelId = channel.getId();
+            String target = channel.getTargetUrl();
+            switch (channel.getChannelType()) {
+                case WEBHOOK -> {
+                    if (webhookJsonBody == null) {
+                        webhookJsonBody = serializePayload(buildWebhookPayload(alert));
+                    }
+                    if (webhookJsonBody != null) {
+                        String body = webhookJsonBody;
+                        Thread.ofVirtual().start(() -> deliverWebhook(channelId, target, body));
+                    }
+                }
+                case SLACK -> {
+                    if (slackJsonBody == null) {
+                        slackJsonBody = serializePayload(buildSlackBlockKitPayload(alert));
+                    }
+                    if (slackJsonBody != null) {
+                        String body = slackJsonBody;
+                        Thread.ofVirtual().start(() -> deliverWebhook(channelId, target, body));
+                    }
+                }
+                case EMAIL -> Thread.ofVirtual().start(() -> emailAlertService.sendIncidentEmail(target, alert));
+            }
+        }
+    }
+
+    private Map<String, Object> buildWebhookPayload(PendingWebhookAlert alert) {
+        String humanMessage = formatHumanMessage(alert);
         Map<String, Object> payload = new LinkedHashMap<>();
         payload.put("event", alert.eventType());
         payload.put("monitorId", alert.monitorId());
@@ -75,17 +100,52 @@ public class WebhookAlertService {
         payload.put("timestamp", Instant.now().toString());
         payload.put("content", humanMessage);
         payload.put("text", humanMessage);
+        return payload;
+    }
 
-        String jsonBody = serializePayload(payload);
-        if (jsonBody == null) {
-            return;
-        }
+    private Map<String, Object> buildSlackBlockKitPayload(PendingWebhookAlert alert) {
+        String summaryText = alert.summary() != null && !alert.summary().isBlank()
+                ? alert.summary()
+                : alert.status();
 
-        for (AlertChannel channel : channels) {
-            String targetUrl = channel.getTargetUrl();
-            UUID channelId = channel.getId();
-            Thread.ofVirtual().start(() -> deliverWebhook(channelId, targetUrl, jsonBody));
-        }
+        Map<String, Object> headerBlock = Map.of(
+                "type", "header",
+                "text", Map.of(
+                        "type", "plain_text",
+                        "text", String.format("[OpsPulse] %s", alert.eventType())
+                )
+        );
+
+        List<Map<String, Object>> fields = List.of(
+                mrkdwnField("*Monitor:*\n" + alert.monitorName() + " (" + alert.monitorUrl() + ")"),
+                mrkdwnField("*Status:*\n" + alert.status()),
+                mrkdwnField("*Summary:*\n" + summaryText),
+                mrkdwnField("*Incident ID:*\n" + alert.incidentId())
+        );
+
+        Map<String, Object> sectionBlock = Map.of(
+                "type", "section",
+                "fields", fields
+        );
+
+        Map<String, Object> payload = new LinkedHashMap<>();
+        payload.put("text", formatHumanMessage(alert));
+        payload.put("blocks", List.of(headerBlock, sectionBlock));
+        return payload;
+    }
+
+    private Map<String, Object> mrkdwnField(String text) {
+        return Map.of("type", "mrkdwn", "text", text);
+    }
+
+    private String formatHumanMessage(PendingWebhookAlert alert) {
+        return String.format(
+                "[OpsPulse] %s — %s (%s): %s",
+                alert.eventType(),
+                alert.monitorName(),
+                alert.monitorUrl(),
+                alert.summary() != null ? alert.summary() : alert.status()
+        );
     }
 
     private void deliverWebhook(UUID channelId, String targetUrl, String jsonBody) {
