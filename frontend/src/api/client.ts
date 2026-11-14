@@ -14,8 +14,11 @@ import {
   type MonitorCheckedEvent,
   type MonitorResponse,
   type PauseMonitorRequest,
+  type PublicStatusResponse,
   type RefreshTokenRequest,
   type RegisterRequest,
+  type StatusPageSettingsResponse,
+  type UpdateStatusPageRequest,
   type WorkspaceResponse,
 } from './types'
 
@@ -368,6 +371,39 @@ export const alertChannelApi = {
     return apiRequest<void>(
       `/api/v1/workspaces/${workspaceId}/alert-channels/${channelId}`,
       { method: 'DELETE' },
+    )
+  },
+}
+
+export const statusPageApi = {
+  getSettings(workspaceId: string): Promise<StatusPageSettingsResponse> {
+    return apiRequest<StatusPageSettingsResponse>(
+      `/api/v1/workspaces/${workspaceId}/status-page`,
+      { method: 'GET' },
+    )
+  },
+
+  updateSettings(
+    workspaceId: string,
+    payload: UpdateStatusPageRequest,
+  ): Promise<StatusPageSettingsResponse> {
+    return apiRequest<StatusPageSettingsResponse>(
+      `/api/v1/workspaces/${workspaceId}/status-page`,
+      {
+        method: 'PUT',
+        body: JSON.stringify(payload),
+      },
+    )
+  },
+
+  getPublicStatus(slug: string): Promise<PublicStatusResponse> {
+    return apiRequest<PublicStatusResponse>(
+      `/api/v1/public/status/${encodeURIComponent(slug)}`,
+      {
+        method: 'GET',
+        skipAuth: true,
+        retryOnUnauthorized: false,
+      },
     )
   },
 }

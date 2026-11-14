@@ -183,3 +183,59 @@ export interface IncidentChangedEvent {
   resolvedAt: string | null
 }
 
+export type StatusPageOverallStatus = 'OPERATIONAL' | 'DEGRADED' | 'MAJOR_OUTAGE'
+
+export interface StatusPageSettingsResponse {
+  id: string
+  workspaceId: string
+  slug: string
+  title: string
+  description: string | null
+  isPublic: boolean
+  updatedAt: string
+}
+
+export interface UpdateStatusPageRequest {
+  slug: string
+  title: string
+  description: string | null
+  isPublic: boolean
+}
+
+export interface DailyUptimeBucket {
+  date: string
+  uptimePercent: number | null
+  totalChecks: number
+}
+
+export interface PublicMonitorStatus {
+  id: string
+  name: string
+  currentStatus: MonitorStatus
+  lastCheckedAt: string | null
+  lastLatencyMs: number | null
+  uptime24h: number | null
+  uptime7d: number | null
+  uptime30d: number | null
+  dailyUptime: DailyUptimeBucket[]
+}
+
+export interface PublicIncidentSummary {
+  id: string
+  monitorName: string
+  status: IncidentStatus
+  startedAt: string
+  resolvedAt: string | null
+  summary: string | null
+}
+
+export interface PublicStatusResponse {
+  slug: string
+  title: string
+  description: string | null
+  overallStatus: StatusPageOverallStatus
+  generatedAt: string
+  monitors: PublicMonitorStatus[]
+  recentIncidents: PublicIncidentSummary[]
+}
+

@@ -6,6 +6,7 @@ import {
   Bell,
   Building2,
   CheckCircle2,
+  Globe,
   Loader2,
   LogOut,
   Plus,
@@ -45,9 +46,23 @@ import { AlertChannelsPanel } from './components/AlertChannelsPanel'
 import { AuthPage } from './components/AuthPage'
 import { IncidentsPanel } from './components/IncidentsPanel'
 import { MonitorsPanel } from './components/MonitorsPanel'
+import { PublicStatusPage } from './components/PublicStatusPage'
+import { StatusPageSettingsPanel } from './components/StatusPageSettingsPanel'
 
 type BackendStatus = 'checking' | 'UP' | 'Offline'
-type DashboardTab = 'monitors' | 'incidents' | 'alerts'
+type DashboardTab = 'monitors' | 'incidents' | 'alerts' | 'status-page'
+
+function extractPublicStatusSlug(pathname: string): string | null {
+  const match = /^\/status\/([^/]+)\/?$/.exec(pathname)
+  if (!match) {
+    return null
+  }
+  try {
+    return decodeURIComponent(match[1])
+  } catch {
+    return match[1]
+  }
+}
 
 interface ActuatorHealthResponse {
   status?: string
@@ -101,6 +116,15 @@ async function fetchBackendHealth(signal?: AbortSignal): Promise<HealthState> {
 }
 
 export function App() {
+  const publicSlug = extractPublicStatusSlug(window.location.pathname)
+  if (publicSlug) {
+    return <PublicStatusPage slug={publicSlug} />
+  }
+
+  return <DashboardApp />
+}
+
+function DashboardApp() {
   const [health, setHealth] = useState<HealthState>({
     status: 'checking',
     lastChecked: null,
@@ -609,6 +633,12 @@ export function App() {
                 label="Alert Channels"
                 count={alertChannels.length}
               />
+              <TabButton
+                active={activeTab === 'status-page'}
+                onClick={() => setActiveTab('status-page')}
+                icon={<Globe className="h-3.5 w-3.5" />}
+                label="Status Page"
+              />
             </nav>
           </div>
 
@@ -671,6 +701,13 @@ export function App() {
                       prev.filter((c) => c.id !== channelId),
                     )
                   }
+                />
+              )}
+
+              {activeTab === 'status-page' && activeWorkspace && (
+                <StatusPageSettingsPanel
+                  workspaceId={activeWorkspaceId}
+                  workspaceRole={activeWorkspace.role}
                 />
               )}
             </>
