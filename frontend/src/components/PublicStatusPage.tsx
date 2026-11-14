@@ -4,12 +4,14 @@ import {
   AlertCircle,
   AlertOctagon,
   AlertTriangle,
+  CalendarClock,
   CheckCircle2,
   Clock,
   Loader2,
   RefreshCw,
   Server,
   ShieldAlert,
+  Wrench,
 } from 'lucide-react'
 import { statusPageApi } from '../api/client'
 import {
@@ -18,6 +20,7 @@ import {
   type IncidentStatus,
   type MonitorStatus,
   type PublicIncidentSummary,
+  type PublicMaintenanceSummary,
   type PublicMonitorStatus,
   type PublicStatusResponse,
   type StatusPageOverallStatus,
@@ -262,6 +265,81 @@ function PublicMonitorCard({ monitor }: { monitor: PublicMonitorStatus }) {
   )
 }
 
+function PublicMaintenanceBanner({
+  windows,
+}: {
+  windows: PublicMaintenanceSummary[]
+}) {
+  if (windows.length === 0) {
+    return null
+  }
+
+  return (
+    <section aria-labelledby="maintenance-heading" className="space-y-3">
+      <h2
+        id="maintenance-heading"
+        className="text-sm font-semibold uppercase tracking-wider text-slate-400"
+      >
+        Maintenance ({windows.length})
+      </h2>
+      <div className="space-y-3">
+        {windows.map((item) => (
+          <div
+            key={item.id}
+            role={item.active ? 'status' : undefined}
+            className={`rounded-xl border px-5 py-4 ${
+              item.active
+                ? 'border-amber-500/30 bg-amber-500/10 text-amber-100'
+                : 'border-sky-500/30 bg-sky-500/10 text-sky-100'
+            }`}
+          >
+            <div className="flex flex-wrap items-center justify-between gap-2">
+              <div className="flex items-center gap-2.5">
+                <Wrench
+                  className={`h-4 w-4 shrink-0 ${
+                    item.active ? 'text-amber-400' : 'text-sky-400'
+                  }`}
+                />
+                <h3 className="text-sm font-semibold">{item.title}</h3>
+                <span
+                  className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[11px] font-medium ${
+                    item.active
+                      ? 'border-amber-400/40 bg-amber-500/20 text-amber-200'
+                      : 'border-sky-400/40 bg-sky-500/20 text-sky-200'
+                  }`}
+                >
+                  {item.active ? 'In Progress' : 'Scheduled'}
+                </span>
+              </div>
+
+              <div
+                className={`flex items-center gap-1.5 text-xs ${
+                  item.active ? 'text-amber-200/80' : 'text-sky-200/80'
+                }`}
+              >
+                <CalendarClock className="h-3.5 w-3.5" />
+                <span>
+                  {formatDateTime(item.startsAt)} — {formatDateTime(item.endsAt)}
+                </span>
+              </div>
+            </div>
+
+            {item.description && (
+              <p
+                className={`mt-2 text-xs ${
+                  item.active ? 'text-amber-200/90' : 'text-sky-200/90'
+                }`}
+              >
+                {item.description}
+              </p>
+            )}
+          </div>
+        ))}
+      </div>
+    </section>
+  )
+}
+
 function PublicIncidentRow({ incident }: { incident: PublicIncidentSummary }) {
   return (
     <div className="rounded-lg border border-slate-800/80 bg-slate-950/60 p-4">
@@ -470,6 +548,10 @@ export function PublicStatusPage({ slug }: PublicStatusPageProps) {
                 <OverallStatusBanner status={data.overallStatus} />
               </div>
             </div>
+
+            {data.maintenanceWindows && data.maintenanceWindows.length > 0 && (
+              <PublicMaintenanceBanner windows={data.maintenanceWindows} />
+            )}
 
             <section aria-labelledby="monitors-heading">
               <div className="mb-3 flex items-center justify-between">

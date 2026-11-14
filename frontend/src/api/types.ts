@@ -142,7 +142,7 @@ export interface IncidentResponse {
   summary: string
 }
 
-export type AlertChannelType = 'WEBHOOK'
+export type AlertChannelType = 'WEBHOOK' | 'SLACK' | 'EMAIL'
 
 export interface AlertChannelResponse {
   id: string
@@ -229,6 +229,33 @@ export interface PublicIncidentSummary {
   summary: string | null
 }
 
+export interface MaintenanceWindowResponse {
+  id: string
+  workspaceId: string
+  title: string
+  description: string | null
+  startsAt: string
+  endsAt: string
+  active: boolean
+  createdAt: string
+}
+
+export interface CreateMaintenanceWindowRequest {
+  title: string
+  description: string | null
+  startsAt: string
+  endsAt: string
+}
+
+export interface PublicMaintenanceSummary {
+  id: string
+  title: string
+  description: string | null
+  startsAt: string
+  endsAt: string
+  active: boolean
+}
+
 export interface PublicStatusResponse {
   slug: string
   title: string
@@ -237,5 +264,6 @@ export interface PublicStatusResponse {
   generatedAt: string
   monitors: PublicMonitorStatus[]
   recentIncidents: PublicIncidentSummary[]
+  maintenanceWindows?: PublicMaintenanceSummary[]
 }
 

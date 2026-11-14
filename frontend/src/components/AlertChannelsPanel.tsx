@@ -1,7 +1,19 @@
 import { useState, type FormEvent } from 'react'
-import { Bell, Loader2, Plus, Trash2, Webhook } from 'lucide-react'
+import {
+  Bell,
+  Loader2,
+  Mail,
+  MessageSquare,
+  Plus,
+  Trash2,
+  Webhook,
+} from 'lucide-react'
 import { alertChannelApi } from '../api/client'
-import { ApiClientError, type AlertChannelResponse } from '../api/types'
+import {
+  ApiClientError,
+  type AlertChannelResponse,
+  type AlertChannelType,
+} from '../api/types'
 
 interface AlertChannelsPanelProps {
   workspaceId: string
@@ -9,6 +21,58 @@ interface AlertChannelsPanelProps {
   isLoading: boolean
   onChannelCreated: (channel: AlertChannelResponse) => void
   onChannelDeleted: (channelId: string) => void
+}
+
+interface ChannelTypeMeta {
+  label: string
+  targetLabel: string
+  targetPlaceholder: string
+  inputType: 'url' | 'email'
+  badgeClassName: string
+}
+
+const CHANNEL_TYPE_META: Record<AlertChannelType, ChannelTypeMeta> = {
+  WEBHOOK: {
+    label: 'Webhook',
+    targetLabel: 'Webhook URL',
+    targetPlaceholder: 'https://example.com/webhooks/opspulse',
+    inputType: 'url',
+    badgeClassName: 'border-violet-500/30 bg-violet-500/10 text-violet-300',
+  },
+  SLACK: {
+    label: 'Slack',
+    targetLabel: 'Slack Incoming Webhook URL',
+    targetPlaceholder: 'https://hooks.slack.com/services/...',
+    inputType: 'url',
+    badgeClassName: 'border-sky-500/30 bg-sky-500/10 text-sky-300',
+  },
+  EMAIL: {
+    label: 'Email',
+    targetLabel: 'Recipient Email Address',
+    targetPlaceholder: 'oncall@example.com',
+    inputType: 'email',
+    badgeClassName: 'border-emerald-500/30 bg-emerald-500/10 text-emerald-300',
+  },
+}
+
+const EMAIL_PATTERN = /^[^\s@]+@[^\s@]+\.[^\s@]+$/
+
+function ChannelTypeBadge({ type }: { type: AlertChannelType }) {
+  const meta = CHANNEL_TYPE_META[type] ?? CHANNEL_TYPE_META.WEBHOOK
+  return (
+    <span
+      className={`inline-flex items-center gap-1 rounded-md border px-2 py-0.5 text-[11px] font-medium ${meta.badgeClassName}`}
+    >
+      {type === 'SLACK' ? (
+        <MessageSquare className="h-3 w-3" />
+      ) : type === 'EMAIL' ? (
+        <Mail className="h-3 w-3" />
+      ) : (
+        <Webhook className="h-3 w-3" />
+      )}
+      {type}
+    </span>
+  )
 }
 
 export function AlertChannelsPanel({
@@ -19,6 +83,7 @@ export function AlertChannelsPanel({
   onChannelDeleted,
 }: AlertChannelsPanelProps) {
   const [isAddOpen, setIsAddOpen] = useState(false)
+  const [channelType, setChannelType] = useState<AlertChannelType>('WEBHOOK')
   const [name, setName] = useState('')
   const [targetUrl, setTargetUrl] = useState('https://')
   const [isSubmitting, setIsSubmitting] = useState(false)
@@ -27,10 +92,32 @@ export function AlertChannelsPanel({
   const [formError, setFormError] = useState<ApiClientError | null>(null)
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
 
+  const activeMeta = CHANNEL_TYPE_META[channelType]
+
+  function handleChannelTypeChange(nextType: AlertChannelType): void {
+    setChannelType(nextType)
+    setFieldErrors((prev) => {
+      if (!prev.targetUrl) {
+        return prev
+      }
+      const next = { ...prev }
+      delete next.targetUrl
+      return next
+    })
+
+    if (nextType === 'EMAIL') {
+      if (targetUrl.trim() === 'https://' || targetUrl.trim() === 'http://') {
+        setTargetUrl('')
+      }
+    } else if (!targetUrl.trim()) {
+      setTargetUrl('https://')
+    }
+  }
+
   function validateForm(): boolean {
     const errors: Record<string, string> = {}
     const trimmedName = name.trim()
-    const trimmedUrl = targetUrl.trim()
+    const trimmedTarget = targetUrl.trim()
 
     if (!trimmedName) {
       errors.name = 'Channel name is required'
@@ -38,10 +125,18 @@ export function AlertChannelsPanel({
       errors.name = 'Channel name must be between 2 and 120 characters'
     }
 
-    if (!trimmedUrl) {
-      errors.targetUrl = 'Target URL is required'
-    } else if (!/^https?:\/\/.+/i.test(trimmedUrl)) {
-      errors.targetUrl = 'Target URL must start with http:// or https://'
+    if (channelType === 'EMAIL') {
+      if (!trimmedTarget) {
+        errors.targetUrl = 'Recipient email address is required'
+      } else if (!EMAIL_PATTERN.test(trimmedTarget)) {
+        errors.targetUrl = 'Please enter a valid email address'
+      }
+    } else {
+      if (!trimmedTarget || trimmedTarget === 'https://' || trimmedTarget === 'http://') {
+        errors.targetUrl = `${activeMeta.targetLabel} is required`
+      } else if (!/^https?:\/\/.+/i.test(trimmedTarget)) {
+        errors.targetUrl = 'URL must start with http:// or https://'
+      }
     }
 
     setFieldErrors(errors)
@@ -59,12 +154,12 @@ export function AlertChannelsPanel({
     try {
       const created = await alertChannelApi.create(workspaceId, {
         name: name.trim(),
-        channelType: 'WEBHOOK',
+        channelType,
         targetUrl: targetUrl.trim(),
       })
       onChannelCreated(created)
       setName('')
-      setTargetUrl('https://')
+      setTargetUrl(channelType === 'EMAIL' ? '' : 'https://')
       setFieldErrors({})
       setIsAddOpen(false)
     } catch (error) {
@@ -112,7 +207,7 @@ export function AlertChannelsPanel({
             Alert Channels
           </h2>
           <p className="mt-1 text-sm text-slate-400">
-            Configure outbound Discord, Slack, or custom HTTP webhook notifications for incident events.
+            Configure outbound HTTP webhooks, Slack channels, and email notifications for incident events.
           </p>
         </div>
         <button
@@ -125,7 +220,7 @@ export function AlertChannelsPanel({
           className="inline-flex items-center gap-1.5 self-start rounded-lg bg-emerald-500 px-3.5 py-2 text-xs font-semibold text-slate-950 transition hover:bg-emerald-400 sm:self-auto"
         >
           <Plus className="h-4 w-4" />
-          <span>{isAddOpen ? 'Close Form' : 'Add Webhook'}</span>
+          <span>{isAddOpen ? 'Close Form' : 'Add Channel'}</span>
         </button>
       </div>
 
@@ -145,7 +240,7 @@ export function AlertChannelsPanel({
           className="mt-5 rounded-xl border border-slate-800 bg-slate-950/70 p-5"
         >
           <h3 className="text-sm font-semibold text-slate-100">
-            New Webhook Channel
+            New Alert Channel
           </h3>
 
           {formError && (
@@ -161,7 +256,28 @@ export function AlertChannelsPanel({
             </div>
           )}
 
-          <div className="mt-4 grid gap-4 sm:grid-cols-2">
+          <div className="mt-4 grid gap-4 sm:grid-cols-3">
+            <div>
+              <label
+                htmlFor="channel-type"
+                className="block text-xs font-medium uppercase tracking-wider text-slate-400"
+              >
+                Channel Type
+              </label>
+              <select
+                id="channel-type"
+                value={channelType}
+                onChange={(e) =>
+                  handleChannelTypeChange(e.target.value as AlertChannelType)
+                }
+                className="mt-1.5 w-full rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100 focus:border-emerald-500 focus:outline-none"
+              >
+                <option value="WEBHOOK">Webhook</option>
+                <option value="SLACK">Slack</option>
+                <option value="EMAIL">Email</option>
+              </select>
+            </div>
+
             <div>
               <label
                 htmlFor="channel-name"
@@ -174,7 +290,13 @@ export function AlertChannelsPanel({
                 type="text"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="SRE Slack Alerts"
+                placeholder={
+                  channelType === 'SLACK'
+                    ? 'SRE Slack Alerts'
+                    : channelType === 'EMAIL'
+                      ? 'On-Call Engineering'
+                      : 'PagerDuty Webhook'
+                }
                 className="mt-1.5 w-full rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 text-sm text-slate-100 placeholder:text-slate-600 focus:border-emerald-500 focus:outline-none"
               />
               {fieldErrors.name && (
@@ -187,14 +309,14 @@ export function AlertChannelsPanel({
                 htmlFor="channel-url"
                 className="block text-xs font-medium uppercase tracking-wider text-slate-400"
               >
-                Webhook URL
+                {activeMeta.targetLabel}
               </label>
               <input
                 id="channel-url"
-                type="url"
+                type={activeMeta.inputType}
                 value={targetUrl}
                 onChange={(e) => setTargetUrl(e.target.value)}
-                placeholder="https://hooks.slack.com/services/..."
+                placeholder={activeMeta.targetPlaceholder}
                 className="mt-1.5 w-full rounded-lg border border-slate-800 bg-slate-900 px-3 py-2 font-mono text-sm text-slate-100 placeholder:text-slate-600 focus:border-emerald-500 focus:outline-none"
               />
               {fieldErrors.targetUrl && (
@@ -217,7 +339,7 @@ export function AlertChannelsPanel({
               className="inline-flex items-center gap-1.5 rounded-lg bg-emerald-500 px-4 py-2 text-xs font-semibold text-slate-950 transition hover:bg-emerald-400 disabled:cursor-not-allowed disabled:opacity-60"
             >
               {isSubmitting && <Loader2 className="h-3.5 w-3.5 animate-spin" />}
-              <span>Save Webhook</span>
+              <span>Save Channel</span>
             </button>
           </div>
         </form>
@@ -235,7 +357,7 @@ export function AlertChannelsPanel({
             No alert channels configured
           </p>
           <p className="mt-1 max-w-md text-xs text-slate-500">
-            Add an HTTP webhook destination to receive instant alerts when incidents open or resolve.
+            Add a webhook, Slack, or email destination to receive instant alerts when incidents open or resolve.
           </p>
         </div>
       ) : (
@@ -249,10 +371,7 @@ export function AlertChannelsPanel({
               >
                 <div className="min-w-0 space-y-1">
                   <div className="flex items-center gap-2.5">
-                    <span className="inline-flex items-center gap-1 rounded-md border border-violet-500/30 bg-violet-500/10 px-2 py-0.5 text-[11px] font-medium text-violet-300">
-                      <Webhook className="h-3 w-3" />
-                      {channel.channelType}
-                    </span>
+                    <ChannelTypeBadge type={channel.channelType} />
                     <span className="truncate text-sm font-semibold text-slate-100">
                       {channel.name}
                     </span>

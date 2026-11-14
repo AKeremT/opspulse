@@ -5,11 +5,13 @@ import {
   type AuthResponse,
   type AuthSession,
   type CreateAlertChannelRequest,
+  type CreateMaintenanceWindowRequest,
   type CreateMonitorRequest,
   type CreateWorkspaceRequest,
   type IncidentChangedEvent,
   type IncidentResponse,
   type LoginRequest,
+  type MaintenanceWindowResponse,
   type MonitorCheckResponse,
   type MonitorCheckedEvent,
   type MonitorResponse,
@@ -370,6 +372,35 @@ export const alertChannelApi = {
   delete(workspaceId: string, channelId: string): Promise<void> {
     return apiRequest<void>(
       `/api/v1/workspaces/${workspaceId}/alert-channels/${channelId}`,
+      { method: 'DELETE' },
+    )
+  },
+}
+
+export const maintenanceApi = {
+  list(workspaceId: string): Promise<MaintenanceWindowResponse[]> {
+    return apiRequest<MaintenanceWindowResponse[]>(
+      `/api/v1/workspaces/${workspaceId}/maintenance-windows`,
+      { method: 'GET' },
+    )
+  },
+
+  create(
+    workspaceId: string,
+    payload: CreateMaintenanceWindowRequest,
+  ): Promise<MaintenanceWindowResponse> {
+    return apiRequest<MaintenanceWindowResponse>(
+      `/api/v1/workspaces/${workspaceId}/maintenance-windows`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+    )
+  },
+
+  remove(workspaceId: string, windowId: string): Promise<void> {
+    return apiRequest<void>(
+      `/api/v1/workspaces/${workspaceId}/maintenance-windows/${windowId}`,
       { method: 'DELETE' },
     )
   },

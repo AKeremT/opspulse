@@ -14,6 +14,7 @@ import {
   RefreshCw,
   Server,
   WifiOff,
+  Wrench,
   X,
 } from 'lucide-react'
 import {
@@ -45,12 +46,18 @@ import {
 import { AlertChannelsPanel } from './components/AlertChannelsPanel'
 import { AuthPage } from './components/AuthPage'
 import { IncidentsPanel } from './components/IncidentsPanel'
+import { MaintenanceWindowsPanel } from './components/MaintenanceWindowsPanel'
 import { MonitorsPanel } from './components/MonitorsPanel'
 import { PublicStatusPage } from './components/PublicStatusPage'
 import { StatusPageSettingsPanel } from './components/StatusPageSettingsPanel'
 
 type BackendStatus = 'checking' | 'UP' | 'Offline'
-type DashboardTab = 'monitors' | 'incidents' | 'alerts' | 'status-page'
+type DashboardTab =
+  | 'monitors'
+  | 'incidents'
+  | 'alerts'
+  | 'maintenance'
+  | 'status-page'
 
 function extractPublicStatusSlug(pathname: string): string | null {
   const match = /^\/status\/([^/]+)\/?$/.exec(pathname)
@@ -610,7 +617,7 @@ function DashboardApp() {
 
             <nav
               aria-label="Dashboard sections"
-              className="inline-flex rounded-lg border border-slate-800 bg-slate-900 p-1"
+              className="inline-flex flex-wrap rounded-lg border border-slate-800 bg-slate-900 p-1"
             >
               <TabButton
                 active={activeTab === 'monitors'}
@@ -632,6 +639,12 @@ function DashboardApp() {
                 icon={<Bell className="h-3.5 w-3.5" />}
                 label="Alert Channels"
                 count={alertChannels.length}
+              />
+              <TabButton
+                active={activeTab === 'maintenance'}
+                onClick={() => setActiveTab('maintenance')}
+                icon={<Wrench className="h-3.5 w-3.5" />}
+                label="Maintenance"
               />
               <TabButton
                 active={activeTab === 'status-page'}
@@ -701,6 +714,13 @@ function DashboardApp() {
                       prev.filter((c) => c.id !== channelId),
                     )
                   }
+                />
+              )}
+
+              {activeTab === 'maintenance' && activeWorkspace && (
+                <MaintenanceWindowsPanel
+                  workspaceId={activeWorkspaceId}
+                  workspaceRole={activeWorkspace.role}
                 />
               )}
 
