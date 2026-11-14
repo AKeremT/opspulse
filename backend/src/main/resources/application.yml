@@ -40,6 +40,9 @@ management:
   endpoint:
     health:
       show-details: when_authorized
+  health:
+    mail:
+      enabled: ${ALERT_EMAIL_ENABLED:false}
 
 app:
   cors:
