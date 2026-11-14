@@ -45,4 +45,13 @@ public class WorkspaceAccessService {
         }
         return member.getWorkspace();
     }
+
+    @Transactional(readOnly = true)
+    public Workspace requireAdminAccess(UUID workspaceId, UUID userId) {
+        WorkspaceMember member = requireReadAccess(workspaceId, userId);
+        if (member.getRole() != WorkspaceRole.OWNER && member.getRole() != WorkspaceRole.ADMIN) {
+            throw new ForbiddenException("Admin or Owner role is required to manage this resource");
+        }
+        return member.getWorkspace();
+    }
 }

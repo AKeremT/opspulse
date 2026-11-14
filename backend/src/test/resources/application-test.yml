@@ -6,5 +6,8 @@ app:
   monitor:
     allow-private-targets: true
     scheduler-enabled: false
+  public-status:
+    cache-ttl-seconds: 30
+    rate-limit-per-minute: 60
   jwt:
     secret: test-only-opspulse-secret-key-minimum-32-bytes-long-for-hs256

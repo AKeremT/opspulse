@@ -30,6 +30,7 @@ spring:
 
 server:
   port: ${SERVER_PORT:8080}
+  forward-headers-strategy: framework
 
 management:
   endpoints:
@@ -47,6 +48,9 @@ app:
     allow-private-targets: ${MONITOR_ALLOW_PRIVATE_TARGETS:false}
     scheduler-enabled: ${MONITOR_SCHEDULER_ENABLED:true}
     scheduler-poll-ms: ${MONITOR_SCHEDULER_POLL_MS:5000}
+  public-status:
+    cache-ttl-seconds: ${PUBLIC_STATUS_CACHE_TTL_SECONDS:30}
+    rate-limit-per-minute: ${PUBLIC_STATUS_RATE_LIMIT_PER_MINUTE:60}
   jwt:
     secret: ${JWT_SECRET}
     access-expiration-ms: ${JWT_ACCESS_EXPIRATION_MS:900000}
