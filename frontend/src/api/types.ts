@@ -81,3 +81,105 @@ export interface AuthSession {
   expiresInMs: number
   user: UserSummary
 }
+
+export type MonitorHttpMethod = 'GET' | 'HEAD' | 'POST'
+export type MonitorStatus = 'UNKNOWN' | 'UP' | 'DOWN'
+
+export interface MonitorResponse {
+  id: string
+  workspaceId: string
+  name: string
+  url: string
+  httpMethod: MonitorHttpMethod
+  intervalSeconds: number
+  timeoutMs: number
+  expectedStatus: number
+  failureThreshold: number
+  consecutiveFailures: number
+  currentStatus: MonitorStatus
+  paused: boolean
+  nextCheckAt: string | null
+  lastCheckedAt: string | null
+  lastLatencyMs: number | null
+  createdAt: string
+}
+
+export interface CreateMonitorRequest {
+  name: string
+  url: string
+  httpMethod?: MonitorHttpMethod
+  intervalSeconds?: number
+  timeoutMs?: number
+  expectedStatus?: number
+  failureThreshold?: number
+}
+
+export interface PauseMonitorRequest {
+  paused: boolean
+}
+
+export interface MonitorCheckResponse {
+  id: string
+  monitorId: string
+  status: MonitorStatus
+  statusCode: number | null
+  latencyMs: number | null
+  errorMessage: string | null
+  checkedAt: string
+}
+
+export type IncidentStatus = 'OPEN' | 'ACKNOWLEDGED' | 'RESOLVED'
+
+export interface IncidentResponse {
+  id: string
+  monitorId: string
+  monitorName: string
+  workspaceId: string
+  status: IncidentStatus
+  startedAt: string
+  acknowledgedAt: string | null
+  resolvedAt: string | null
+  summary: string
+}
+
+export type AlertChannelType = 'WEBHOOK'
+
+export interface AlertChannelResponse {
+  id: string
+  workspaceId: string
+  name: string
+  channelType: AlertChannelType
+  targetUrl: string
+  enabled: boolean
+  createdAt: string
+}
+
+export interface CreateAlertChannelRequest {
+  name: string
+  channelType?: AlertChannelType
+  targetUrl: string
+}
+
+export interface MonitorCheckedEvent {
+  monitorId: string
+  workspaceId: string
+  monitorName: string
+  status: MonitorStatus
+  statusCode: number | null
+  latencyMs: number
+  consecutiveFailures: number
+  checkedAt: string
+}
+
+export interface IncidentChangedEvent {
+  incidentId: string
+  monitorId: string
+  workspaceId: string
+  monitorName: string
+  status: IncidentStatus
+  summary: string
+  startedAt: string
+  acknowledgedAt: string | null
+  resolvedAt: string | null
+}
+

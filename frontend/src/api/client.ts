@@ -1,10 +1,19 @@
 import {
   ApiClientError,
+  type AlertChannelResponse,
   type ApiErrorPayload,
   type AuthResponse,
   type AuthSession,
+  type CreateAlertChannelRequest,
+  type CreateMonitorRequest,
   type CreateWorkspaceRequest,
+  type IncidentChangedEvent,
+  type IncidentResponse,
   type LoginRequest,
+  type MonitorCheckResponse,
+  type MonitorCheckedEvent,
+  type MonitorResponse,
+  type PauseMonitorRequest,
   type RefreshTokenRequest,
   type RegisterRequest,
   type WorkspaceResponse,
@@ -260,4 +269,224 @@ export const workspaceApi = {
       body: JSON.stringify(payload),
     })
   },
+}
+
+export const monitorApi = {
+  list(workspaceId: string): Promise<MonitorResponse[]> {
+    return apiRequest<MonitorResponse[]>(
+      `/api/v1/workspaces/${workspaceId}/monitors`,
+      { method: 'GET' },
+    )
+  },
+
+  create(
+    workspaceId: string,
+    payload: CreateMonitorRequest,
+  ): Promise<MonitorResponse> {
+    return apiRequest<MonitorResponse>(
+      `/api/v1/workspaces/${workspaceId}/monitors`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+    )
+  },
+
+  setPaused(
+    workspaceId: string,
+    monitorId: string,
+    paused: boolean,
+  ): Promise<MonitorResponse> {
+    return apiRequest<MonitorResponse>(
+      `/api/v1/workspaces/${workspaceId}/monitors/${monitorId}/pause`,
+      {
+        method: 'PATCH',
+        body: JSON.stringify({ paused } satisfies PauseMonitorRequest),
+      },
+    )
+  },
+
+  delete(workspaceId: string, monitorId: string): Promise<void> {
+    return apiRequest<void>(
+      `/api/v1/workspaces/${workspaceId}/monitors/${monitorId}`,
+      { method: 'DELETE' },
+    )
+  },
+
+  listChecks(
+    workspaceId: string,
+    monitorId: string,
+  ): Promise<MonitorCheckResponse[]> {
+    return apiRequest<MonitorCheckResponse[]>(
+      `/api/v1/workspaces/${workspaceId}/monitors/${monitorId}/checks`,
+      { method: 'GET' },
+    )
+  },
+}
+
+export const incidentApi = {
+  list(workspaceId: string): Promise<IncidentResponse[]> {
+    return apiRequest<IncidentResponse[]>(
+      `/api/v1/workspaces/${workspaceId}/incidents`,
+      { method: 'GET' },
+    )
+  },
+
+  acknowledge(
+    workspaceId: string,
+    incidentId: string,
+  ): Promise<IncidentResponse> {
+    return apiRequest<IncidentResponse>(
+      `/api/v1/workspaces/${workspaceId}/incidents/${incidentId}/acknowledge`,
+      { method: 'POST' },
+    )
+  },
+}
+
+export const alertChannelApi = {
+  list(workspaceId: string): Promise<AlertChannelResponse[]> {
+    return apiRequest<AlertChannelResponse[]>(
+      `/api/v1/workspaces/${workspaceId}/alert-channels`,
+      { method: 'GET' },
+    )
+  },
+
+  create(
+    workspaceId: string,
+    payload: CreateAlertChannelRequest,
+  ): Promise<AlertChannelResponse> {
+    return apiRequest<AlertChannelResponse>(
+      `/api/v1/workspaces/${workspaceId}/alert-channels`,
+      {
+        method: 'POST',
+        body: JSON.stringify(payload),
+      },
+    )
+  },
+
+  delete(workspaceId: string, channelId: string): Promise<void> {
+    return apiRequest<void>(
+      `/api/v1/workspaces/${workspaceId}/alert-channels/${channelId}`,
+      { method: 'DELETE' },
+    )
+  },
+}
+
+export interface WorkspaceEventHandlers {
+  onConnected?: () => void
+  onDisconnected?: () => void
+  onMonitorChecked?: (event: MonitorCheckedEvent) => void
+  onIncidentChanged?: (event: IncidentChangedEvent) => void
+}
+
+function dispatchSseFrame(
+  rawFrame: string,
+  handlers: WorkspaceEventHandlers,
+): void {
+  const lines = rawFrame.split('\n')
+  let eventName = 'message'
+  const dataLines: string[] = []
+
+  for (const line of lines) {
+    if (!line || line.startsWith(':')) {
+      continue
+    }
+    if (line.startsWith('event:')) {
+      eventName = line.slice('event:'.length).trim()
+    } else if (line.startsWith('data:')) {
+      dataLines.push(line.slice('data:'.length).trimStart())
+    }
+  }
+
+  if (eventName === 'connected') {
+    handlers.onConnected?.()
+    return
+  }
+
+  if (dataLines.length === 0) {
+    return
+  }
+
+  const rawData = dataLines.join('\n')
+  try {
+    if (eventName === 'monitor.checked') {
+      handlers.onMonitorChecked?.(JSON.parse(rawData) as MonitorCheckedEvent)
+    } else if (eventName === 'incident.changed') {
+      handlers.onIncidentChanged?.(JSON.parse(rawData) as IncidentChangedEvent)
+    }
+  } catch {
+    // Ignore malformed SSE JSON payload rather than crashing the stream.
+  }
+}
+
+export async function subscribeWorkspaceEvents(
+  workspaceId: string,
+  handlers: WorkspaceEventHandlers,
+  signal: AbortSignal,
+): Promise<void> {
+  const openStream = async (accessToken: string): Promise<Response> =>
+    fetch(`/api/v1/workspaces/${workspaceId}/events`, {
+      method: 'GET',
+      headers: {
+        Accept: 'text/event-stream',
+        Authorization: `Bearer ${accessToken}`,
+      },
+      signal,
+    })
+
+  let session = getStoredSession()
+  if (!session?.accessToken) {
+    handlers.onDisconnected?.()
+    return
+  }
+
+  let response = await openStream(session.accessToken)
+  if (response.status === 401) {
+    session = await refreshSessionSingleFlight()
+    if (!session?.accessToken) {
+      handlers.onDisconnected?.()
+      return
+    }
+    response = await openStream(session.accessToken)
+  }
+
+  if (!response.ok || !response.body) {
+    handlers.onDisconnected?.()
+    return
+  }
+
+  handlers.onConnected?.()
+
+  const reader = response.body.getReader()
+  const decoder = new TextDecoder()
+  let buffer = ''
+
+  try {
+    while (!signal.aborted) {
+      const { done, value } = await reader.read()
+      if (done) {
+        break
+      }
+
+      buffer += decoder.decode(value, { stream: true }).replace(/\r\n/g, '\n')
+      let boundaryIndex = buffer.indexOf('\n\n')
+      while (boundaryIndex !== -1) {
+        const frame = buffer.slice(0, boundaryIndex)
+        buffer = buffer.slice(boundaryIndex + 2)
+        if (frame.trim()) {
+          dispatchSseFrame(frame, handlers)
+        }
+        boundaryIndex = buffer.indexOf('\n\n')
+      }
+    }
+  } catch (error) {
+    if (!(error instanceof DOMException && error.name === 'AbortError')) {
+      handlers.onDisconnected?.()
+    }
+  } finally {
+    reader.releaseLock()
+    if (!signal.aborted) {
+      handlers.onDisconnected?.()
+    }
+  }
 }

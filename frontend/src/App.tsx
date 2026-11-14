@@ -9,29 +9,42 @@ import {
   Loader2,
   LogOut,
   Plus,
+  Radio,
   RefreshCw,
   Server,
-  ShieldCheck,
   WifiOff,
   X,
 } from 'lucide-react'
 import {
+  alertChannelApi,
   authApi,
   clearStoredSession,
   getStoredSession,
   getStoredWorkspaceId,
+  incidentApi,
+  monitorApi,
   saveStoredWorkspaceId,
   subscribeSessionCleared,
+  subscribeWorkspaceEvents,
   toAuthSession,
   workspaceApi,
 } from './api/client'
 import {
   ApiClientError,
+  type AlertChannelResponse,
   type AuthResponse,
   type AuthSession,
+  type IncidentChangedEvent,
+  type IncidentResponse,
+  type MonitorCheckResponse,
+  type MonitorCheckedEvent,
+  type MonitorResponse,
   type WorkspaceResponse,
 } from './api/types'
+import { AlertChannelsPanel } from './components/AlertChannelsPanel'
 import { AuthPage } from './components/AuthPage'
+import { IncidentsPanel } from './components/IncidentsPanel'
+import { MonitorsPanel } from './components/MonitorsPanel'
 
 type BackendStatus = 'checking' | 'UP' | 'Offline'
 type DashboardTab = 'monitors' | 'incidents' | 'alerts'
@@ -105,6 +118,16 @@ export function App() {
   const [activeTab, setActiveTab] = useState<DashboardTab>('monitors')
   const [isCreateWorkspaceOpen, setIsCreateWorkspaceOpen] = useState(false)
 
+  const [monitors, setMonitors] = useState<MonitorResponse[]>([])
+  const [incidents, setIncidents] = useState<IncidentResponse[]>([])
+  const [alertChannels, setAlertChannels] = useState<AlertChannelResponse[]>([])
+  const [checksByMonitor, setChecksByMonitor] = useState<
+    Record<string, MonitorCheckResponse[]>
+  >({})
+  const [isLoadingWorkspaceData, setIsLoadingWorkspaceData] = useState(false)
+  const [workspaceDataError, setWorkspaceDataError] = useState<string | null>(null)
+  const [isSseConnected, setIsSseConnected] = useState(false)
+
   const handleRefreshHealth = useCallback(async () => {
     setIsRefreshingHealth(true)
     try {
@@ -147,6 +170,11 @@ export function App() {
       setWorkspaces([])
       setActiveWorkspaceId(null)
       setWorkspaceError(null)
+      setMonitors([])
+      setIncidents([])
+      setAlertChannels([])
+      setChecksByMonitor({})
+      setIsSseConnected(false)
     })
   }, [])
 
@@ -215,6 +243,151 @@ export function App() {
     }
   }, [session, applyWorkspaceList])
 
+  const loadWorkspaceData = useCallback(async (workspaceId: string) => {
+    setIsLoadingWorkspaceData(true)
+    setWorkspaceDataError(null)
+    try {
+      const [monitorList, incidentList, channelList] = await Promise.all([
+        monitorApi.list(workspaceId),
+        incidentApi.list(workspaceId),
+        alertChannelApi.list(workspaceId),
+      ])
+      setMonitors(monitorList)
+      setIncidents(incidentList)
+      setAlertChannels(channelList)
+      setChecksByMonitor({})
+    } catch (error) {
+      setWorkspaceDataError(
+        error instanceof ApiClientError
+          ? error.message
+          : 'Unable to load workspace telemetry.',
+      )
+    } finally {
+      setIsLoadingWorkspaceData(false)
+    }
+  }, [])
+
+  useEffect(() => {
+    if (!session || !activeWorkspaceId) {
+      return
+    }
+
+    let cancelled = false
+    const syncWorkspaceData = async () => {
+      try {
+        const [monitorList, incidentList, channelList] = await Promise.all([
+          monitorApi.list(activeWorkspaceId),
+          incidentApi.list(activeWorkspaceId),
+          alertChannelApi.list(activeWorkspaceId),
+        ])
+        if (!cancelled) {
+          setWorkspaceDataError(null)
+          setMonitors(monitorList)
+          setIncidents(incidentList)
+          setAlertChannels(channelList)
+          setChecksByMonitor({})
+        }
+      } catch (error) {
+        if (!cancelled) {
+          setWorkspaceDataError(
+            error instanceof ApiClientError
+              ? error.message
+              : 'Unable to load workspace telemetry.',
+          )
+        }
+      }
+    }
+
+    void syncWorkspaceData()
+    return () => {
+      cancelled = true
+    }
+  }, [session, activeWorkspaceId])
+
+  useEffect(() => {
+    if (!session || !activeWorkspaceId) {
+      return
+    }
+
+    const controller = new AbortController()
+
+    const handleMonitorChecked = (event: MonitorCheckedEvent) => {
+      setMonitors((prev) =>
+        prev.map((monitor) =>
+          monitor.id === event.monitorId
+            ? {
+                ...monitor,
+                currentStatus: event.status,
+                lastLatencyMs: event.latencyMs,
+                lastCheckedAt: event.checkedAt,
+                consecutiveFailures: event.consecutiveFailures,
+              }
+            : monitor,
+        ),
+      )
+
+      setChecksByMonitor((prev) => {
+        const existing = prev[event.monitorId]
+        if (!existing) {
+          return prev
+        }
+        const syntheticCheck: MonitorCheckResponse = {
+          id: `${event.monitorId}-${event.checkedAt}`,
+          monitorId: event.monitorId,
+          status: event.status,
+          statusCode: event.statusCode,
+          latencyMs: event.latencyMs,
+          errorMessage: null,
+          checkedAt: event.checkedAt,
+        }
+        return {
+          ...prev,
+          [event.monitorId]: [syntheticCheck, ...existing].slice(0, 20),
+        }
+      })
+    }
+
+    const handleIncidentChanged = (event: IncidentChangedEvent) => {
+      const updatedIncident: IncidentResponse = {
+        id: event.incidentId,
+        monitorId: event.monitorId,
+        monitorName: event.monitorName,
+        workspaceId: event.workspaceId,
+        status: event.status,
+        startedAt: event.startedAt,
+        acknowledgedAt: event.acknowledgedAt,
+        resolvedAt: event.resolvedAt,
+        summary: event.summary,
+      }
+
+      setIncidents((prev) => {
+        const exists = prev.some((item) => item.id === updatedIncident.id)
+        if (exists) {
+          return prev.map((item) =>
+            item.id === updatedIncident.id ? updatedIncident : item,
+          )
+        }
+        return [updatedIncident, ...prev]
+      })
+    }
+
+    void subscribeWorkspaceEvents(
+      activeWorkspaceId,
+      {
+        onConnected: () => setIsSseConnected(true),
+        onDisconnected: () => setIsSseConnected(false),
+        onMonitorChecked: handleMonitorChecked,
+        onIncidentChanged: handleIncidentChanged,
+      },
+      controller.signal,
+    )
+
+    return () => {
+      controller.abort()
+      setIsSseConnected(false)
+    }
+  }, [session, activeWorkspaceId])
+
   function handleAuthSuccess(response: AuthResponse): void {
     const nextSession = toAuthSession(response)
     setSession(nextSession)
@@ -232,6 +405,11 @@ export function App() {
     setWorkspaces([])
     setActiveWorkspaceId(null)
     setWorkspaceError(null)
+    setMonitors([])
+    setIncidents([])
+    setAlertChannels([])
+    setChecksByMonitor({})
+    setIsSseConnected(false)
 
     if (currentRefreshToken) {
       try {
@@ -255,6 +433,7 @@ export function App() {
   }
 
   const activeWorkspace = workspaces.find((w) => w.id === activeWorkspaceId) ?? null
+  const openIncidentCount = incidents.filter((i) => i.status === 'OPEN').length
 
   return (
     <div className="min-h-screen bg-slate-950 text-slate-100 flex flex-col">
@@ -354,18 +533,24 @@ export function App() {
         <AuthPage onAuthSuccess={handleAuthSuccess} />
       ) : (
         <main className="mx-auto w-full max-w-7xl flex-1 px-4 py-8 sm:px-6 lg:px-8">
-          {workspaceError && (
+          {(workspaceError || workspaceDataError) && (
             <div
               role="alert"
               className="mb-6 flex items-center justify-between rounded-lg border border-rose-500/30 bg-rose-500/10 px-4 py-3 text-sm text-rose-200"
             >
               <div className="flex items-center gap-2">
                 <AlertCircle className="h-4 w-4 text-rose-400" />
-                <span>{workspaceError}</span>
+                <span>{workspaceError ?? workspaceDataError}</span>
               </div>
               <button
                 type="button"
-                onClick={() => void loadWorkspaces()}
+                onClick={() => {
+                  if (workspaceError) {
+                    void loadWorkspaces()
+                  } else if (activeWorkspaceId) {
+                    void loadWorkspaceData(activeWorkspaceId)
+                  }
+                }}
                 className="text-xs font-medium text-rose-100 underline hover:no-underline"
               >
                 Retry
@@ -376,9 +561,17 @@ export function App() {
           {/* Active Workspace Header & Navigation Tabs */}
           <div className="mb-6 flex flex-col gap-4 border-b border-slate-800 pb-4 sm:flex-row sm:items-center sm:justify-between">
             <div>
-              <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
-                Active Workspace
-              </p>
+              <div className="flex items-center gap-2.5">
+                <p className="text-xs font-medium uppercase tracking-wider text-slate-400">
+                  Active Workspace
+                </p>
+                {isSseConnected && (
+                  <span className="inline-flex items-center gap-1.5 rounded-full border border-emerald-500/30 bg-emerald-500/10 px-2 py-0.5 text-[11px] font-medium text-emerald-300">
+                    <Radio className="h-3 w-3 animate-pulse" />
+                    Live SSE Connected
+                  </span>
+                )}
+              </div>
               <div className="mt-1 flex items-center gap-2.5">
                 <h2 className="text-lg font-semibold text-slate-100">
                   {activeWorkspace ? activeWorkspace.name : 'Select a workspace'}
@@ -400,117 +593,88 @@ export function App() {
                 onClick={() => setActiveTab('monitors')}
                 icon={<Server className="h-3.5 w-3.5" />}
                 label="Monitors"
+                count={monitors.length}
               />
               <TabButton
                 active={activeTab === 'incidents'}
                 onClick={() => setActiveTab('incidents')}
                 icon={<AlertTriangle className="h-3.5 w-3.5" />}
                 label="Incidents"
+                count={openIncidentCount > 0 ? openIncidentCount : undefined}
               />
               <TabButton
                 active={activeTab === 'alerts'}
                 onClick={() => setActiveTab('alerts')}
                 icon={<Bell className="h-3.5 w-3.5" />}
                 label="Alert Channels"
+                count={alertChannels.length}
               />
             </nav>
           </div>
 
-          {/* Status Summary Grid */}
-          <section
-            aria-label="Platform overview"
-            className="grid gap-4 sm:grid-cols-2 lg:grid-cols-4"
-          >
-            <MetricCard
-              label="Active Monitors"
-              value="0"
-              hint="Ready for live monitor APIs"
-              icon={<Server className="h-4 w-4 text-sky-400" />}
-            />
-            <MetricCard
-              label="Overall Uptime (24h)"
-              value="—"
-              hint="Awaiting first health probe"
-              icon={<ShieldCheck className="h-4 w-4 text-emerald-400" />}
-            />
-            <MetricCard
-              label="Open Incidents"
-              value="0"
-              hint="All systems nominal"
-              icon={<AlertTriangle className="h-4 w-4 text-amber-400" />}
-            />
-            <MetricCard
-              label="Alert Channels"
-              value="0"
-              hint="Webhooks (Discord / Slack / HTTP)"
-              icon={<Bell className="h-4 w-4 text-violet-400" />}
-            />
-          </section>
-
-          {/* Active Section & Backend Connectivity */}
-          <section className="mt-8 grid gap-6 lg:grid-cols-3">
-            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-6 lg:col-span-2">
+          {!activeWorkspaceId ? (
+            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-10 text-center text-sm text-slate-400">
+              Select or create a workspace to manage monitors, incidents, and alert channels.
+            </div>
+          ) : (
+            <>
               {activeTab === 'monitors' && (
-                <SectionPlaceholder
-                  title="Service Monitors"
-                  description="Live HTTP/HTTPS endpoint checks and SSE status stream for the selected workspace."
-                  emptyTitle="Monitors module ready for Part 2"
-                  emptyBody="Monitor creation, probe intervals, and real-time uptime charts will connect here once S2-01 APIs are wired."
-                  icon={<Server className="h-8 w-8 text-slate-600" />}
+                <MonitorsPanel
+                  workspaceId={activeWorkspaceId}
+                  monitors={monitors}
+                  openIncidentCount={openIncidentCount}
+                  isLoading={isLoadingWorkspaceData}
+                  checksByMonitor={checksByMonitor}
+                  onChecksLoaded={(monitorId, checks) =>
+                    setChecksByMonitor((prev) => ({
+                      ...prev,
+                      [monitorId]: checks,
+                    }))
+                  }
+                  onMonitorCreated={(created) =>
+                    setMonitors((prev) => [created, ...prev])
+                  }
+                  onMonitorUpdated={(updated) =>
+                    setMonitors((prev) =>
+                      prev.map((m) => (m.id === updated.id ? updated : m)),
+                    )
+                  }
+                  onMonitorDeleted={(monitorId) =>
+                    setMonitors((prev) => prev.filter((m) => m.id !== monitorId))
+                  }
                 />
               )}
+
               {activeTab === 'incidents' && (
-                <SectionPlaceholder
-                  title="Incident Timeline"
-                  description="Automated outage detection, acknowledgment, and resolution history."
-                  emptyTitle="Incidents module ready for Part 2"
-                  emptyBody="Active and resolved incidents for this workspace will appear here once S2-02 APIs are wired."
-                  icon={<AlertTriangle className="h-8 w-8 text-slate-600" />}
+                <IncidentsPanel
+                  workspaceId={activeWorkspaceId}
+                  incidents={incidents}
+                  isLoading={isLoadingWorkspaceData}
+                  onIncidentUpdated={(updated) =>
+                    setIncidents((prev) =>
+                      prev.map((i) => (i.id === updated.id ? updated : i)),
+                    )
+                  }
                 />
               )}
+
               {activeTab === 'alerts' && (
-                <SectionPlaceholder
-                  title="Alert Channels"
-                  description="Outbound Discord, Slack, and custom HTTP webhook integrations."
-                  emptyTitle="Alert Channels module ready for Part 2"
-                  emptyBody="Configure webhook destinations and test deliveries here once S2-03 APIs are wired."
-                  icon={<Bell className="h-8 w-8 text-slate-600" />}
+                <AlertChannelsPanel
+                  workspaceId={activeWorkspaceId}
+                  channels={alertChannels}
+                  isLoading={isLoadingWorkspaceData}
+                  onChannelCreated={(created) =>
+                    setAlertChannels((prev) => [created, ...prev])
+                  }
+                  onChannelDeleted={(channelId) =>
+                    setAlertChannels((prev) =>
+                      prev.filter((c) => c.id !== channelId),
+                    )
+                  }
                 />
               )}
-            </div>
-
-            <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-6">
-              <h2 className="text-base font-semibold text-slate-100">
-                Backend Connectivity
-              </h2>
-              <p className="mt-1 text-sm text-slate-400">
-                Probing{' '}
-                <code className="rounded bg-slate-800 px-1.5 py-0.5 text-xs text-slate-200">
-                  /actuator/health
-                </code>{' '}
-                via Vite proxy.
-              </p>
-
-              <dl className="mt-6 space-y-4 text-sm">
-                <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
-                  <dt className="text-slate-400">API Status</dt>
-                  <dd className="font-medium text-slate-100">
-                    {health.status === 'checking' ? 'Checking…' : health.status}
-                  </dd>
-                </div>
-                <div className="flex items-center justify-between border-b border-slate-800/80 pb-3">
-                  <dt className="text-slate-400">Proxy Target</dt>
-                  <dd className="font-mono text-xs text-slate-300">localhost:8080</dd>
-                </div>
-                <div className="flex items-center justify-between">
-                  <dt className="text-slate-400">Last Checked</dt>
-                  <dd className="font-mono text-xs text-slate-300">
-                    {health.lastChecked ?? 'Pending'}
-                  </dd>
-                </div>
-              </dl>
-            </div>
-          </section>
+            </>
+          )}
         </main>
       )}
 
@@ -706,9 +870,10 @@ interface TabButtonProps {
   onClick: () => void
   icon: React.ReactNode
   label: string
+  count?: number
 }
 
-function TabButton({ active, onClick, icon, label }: TabButtonProps) {
+function TabButton({ active, onClick, icon, label, count }: TabButtonProps) {
   return (
     <button
       type="button"
@@ -721,43 +886,12 @@ function TabButton({ active, onClick, icon, label }: TabButtonProps) {
     >
       {icon}
       <span>{label}</span>
-    </button>
-  )
-}
-
-interface SectionPlaceholderProps {
-  title: string
-  description: string
-  emptyTitle: string
-  emptyBody: string
-  icon: React.ReactNode
-}
-
-function SectionPlaceholder({
-  title,
-  description,
-  emptyTitle,
-  emptyBody,
-  icon,
-}: SectionPlaceholderProps) {
-  return (
-    <>
-      <div className="flex items-center justify-between">
-        <div>
-          <h2 className="text-base font-semibold text-slate-100">{title}</h2>
-          <p className="mt-1 text-sm text-slate-400">{description}</p>
-        </div>
-        <span className="rounded-md border border-slate-800 bg-slate-950 px-2.5 py-1 text-xs font-medium text-slate-400">
-          Sprint 2 Ready
+      {count !== undefined && (
+        <span className="rounded bg-slate-950/80 px-1.5 py-0.5 text-[10px] text-slate-300">
+          {count}
         </span>
-      </div>
-
-      <div className="mt-6 flex flex-col items-center justify-center rounded-lg border border-dashed border-slate-800 bg-slate-950/50 px-6 py-12 text-center">
-        {icon}
-        <p className="mt-3 text-sm font-medium text-slate-300">{emptyTitle}</p>
-        <p className="mt-1 max-w-md text-xs text-slate-500">{emptyBody}</p>
-      </div>
-    </>
+      )}
+    </button>
   )
 }
 
@@ -798,30 +932,6 @@ function BackendHealthBadge({ status }: { status: BackendStatus }) {
       <WifiOff className="h-3.5 w-3.5" />
       <span>Backend: Offline</span>
     </span>
-  )
-}
-
-interface MetricCardProps {
-  label: string
-  value: string
-  hint: string
-  icon: React.ReactNode
-}
-
-function MetricCard({ label, value, hint, icon }: MetricCardProps) {
-  return (
-    <div className="rounded-xl border border-slate-800 bg-slate-900/60 p-5">
-      <div className="flex items-center justify-between">
-        <span className="text-xs font-medium uppercase tracking-wider text-slate-400">
-          {label}
-        </span>
-        <div className="rounded-md bg-slate-800/80 p-1.5">{icon}</div>
-      </div>
-      <p className="mt-3 text-2xl font-semibold tracking-tight text-slate-100">
-        {value}
-      </p>
-      <p className="mt-1 text-xs text-slate-500">{hint}</p>
-    </div>
   )
 }
 
