@@ -1,6 +1,9 @@
 spring:
   application:
     name: OpsPulse
+  threads:
+    virtual:
+      enabled: true
 
   datasource:
     url: jdbc:postgresql://${POSTGRES_HOST:localhost}:${POSTGRES_PORT:5432}/${POSTGRES_DB:opspulse}
@@ -40,6 +43,10 @@ management:
 app:
   cors:
     allowed-origins: ${CORS_ALLOWED_ORIGINS:http://localhost:5173}
+  monitor:
+    allow-private-targets: ${MONITOR_ALLOW_PRIVATE_TARGETS:false}
+    scheduler-enabled: ${MONITOR_SCHEDULER_ENABLED:true}
+    scheduler-poll-ms: ${MONITOR_SCHEDULER_POLL_MS:5000}
   jwt:
     secret: ${JWT_SECRET}
     access-expiration-ms: ${JWT_ACCESS_EXPIRATION_MS:900000}

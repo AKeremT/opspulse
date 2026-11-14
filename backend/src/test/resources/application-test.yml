@@ -3,5 +3,8 @@ spring:
     password: test-only-postgres-password
 
 app:
+  monitor:
+    allow-private-targets: true
+    scheduler-enabled: false
   jwt:
     secret: test-only-opspulse-secret-key-minimum-32-bytes-long-for-hs256
